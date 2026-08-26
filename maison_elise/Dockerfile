@@ -17,4 +17,4 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
 COPY app /app
 
-CMD ["python3", "/app/main.py"]
+CMD ["with-contenv", "python3", "/app/main.py"]
