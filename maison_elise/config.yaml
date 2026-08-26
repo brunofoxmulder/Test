@@ -1,0 +1,24 @@
+name: Maison Élise
+version: "0.1.0-dev.1"
+slug: maison_elise
+description: "Passerelle d'entrée Alexa vers l'agent conversationnel Home Assistant."
+url: "https://github.com/brunofoxmulder/Test"
+startup: application
+stage: experimental
+boot: manual
+init: false
+arch:
+  - amd64
+homeassistant_api: true
+hassio_api: false
+host_network: false
+full_access: false
+apparmor: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:message-processing
+panel_title: Maison Élise
+options:
+  log_level: INFO
+schema:
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
