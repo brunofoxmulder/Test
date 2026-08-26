@@ -4,6 +4,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,9 @@ from ha_client import (
 
 OPTIONS_FILE = Path("/data/options.json")
 INGRESS_PROXY_IP = ipaddress.ip_address("172.30.32.2")
+HOME_ASSISTANT_HOSTNAME = "homeassistant"
+BRIDGE_CONVERSATION_PATH = "/api/v1/bridge/conversation"
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 MAX_REQUEST_ID_LENGTH = 128
 MAX_SOURCE_LENGTH = 64
 MAX_SESSION_ID_LENGTH = 256
@@ -27,7 +31,7 @@ MAX_TEXT_LENGTH = 4096
 
 AGENT_ID = "conversation.openai_conversation"
 LANGUAGE = "fr"
-VERSION = "0.1.0-dev.4"
+VERSION = "0.1.0-dev.5"
 
 TESTER_HTML = """<!doctype html>
 <html lang="fr">
@@ -49,7 +53,7 @@ TESTER_HTML = """<!doctype html>
 <body>
   <h1>Maison Élise — Recette locale</h1>
   <div class="card">
-    <div><strong>Version :</strong> 0.1.0-dev.4</div>
+    <div><strong>Version :</strong> 0.1.0-dev.5</div>
     <div><strong>Agent :</strong> conversation.openai_conversation</div>
     <div><strong>Langue :</strong> fr</div>
     <div class="muted">Ingress uniquement · aucune exposition publique Alexa dans ce jalon.</div>
@@ -232,9 +236,47 @@ def is_ingress_source_allowed(remote: str | None) -> bool:
         return False
 
 
+def resolve_home_assistant_ips(hostname: str = HOME_ASSISTANT_HOSTNAME) -> frozenset[IPAddress]:
+    """Resolve Home Assistant Core on the private Supervisor network."""
+
+    try:
+        records = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return frozenset()
+
+    addresses: set[IPAddress] = set()
+    for _family, _socktype, _proto, _canonname, sockaddr in records:
+        try:
+            addresses.add(ipaddress.ip_address(sockaddr[0]))
+        except (ValueError, IndexError):
+            continue
+    return frozenset(addresses)
+
+
+def is_home_assistant_source_allowed(
+    remote: str | None,
+    allowed_ips: frozenset[IPAddress],
+) -> bool:
+    """Accept Bridge calls only when they originate from Home Assistant Core."""
+
+    if not remote or not allowed_ips:
+        return False
+    try:
+        return ipaddress.ip_address(remote) in allowed_ips
+    except ValueError:
+        return False
+
+
 @web.middleware
-async def ingress_only(request: web.Request, handler):
-    if not is_ingress_source_allowed(request.remote):
+async def internal_access_only(request: web.Request, handler):
+    if request.path == BRIDGE_CONVERSATION_PATH:
+        allowed_ips = request.app["home_assistant_ips"]
+        if not is_home_assistant_source_allowed(request.remote, allowed_ips):
+            LOGGER.warning(
+                "bridge_rejected remote=%s", request.remote or "unknown"
+            )
+            raise web.HTTPForbidden(text="Home Assistant Core access only")
+    elif not is_ingress_source_allowed(request.remote):
         LOGGER.warning("ingress_rejected remote=%s", request.remote or "unknown")
         raise web.HTTPForbidden(text="Ingress access only")
     return await handler(request)
@@ -265,6 +307,14 @@ async def conversation(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Invalid JSON") from exc
 
     envelope = normalize_request(payload)
+
+    if request.path == BRIDGE_CONVERSATION_PATH and envelope.source != "alexa-bridge":
+        LOGGER.warning(
+            "bridge_rejected_source request_id=%s source=%s",
+            envelope.request_id,
+            envelope.source,
+        )
+        raise web.HTTPForbidden(text="Invalid bridge source")
 
     LOGGER.info(
         "request_received request_id=%s source=%s text_length=%d "
@@ -341,8 +391,9 @@ async def conversation(request: web.Request) -> web.Response:
         result.continue_conversation,
     )
 
-    # Dev.4 returns the HA response only to the authenticated Ingress tester.
-    # Alexa asynchronous delivery is deliberately NOT implemented yet.
+    # Dev.5 returns the same normalized response to either the authenticated
+    # Ingress tester or the Home Assistant Core Bridge route. Alexa itself is
+    # still never exposed directly to this App.
     return web.json_response(
         {
             "ok": True,
@@ -358,13 +409,21 @@ async def conversation(request: web.Request) -> web.Response:
 
 
 def create_app() -> web.Application:
+    home_assistant_ips = resolve_home_assistant_ips()
+    if home_assistant_ips:
+        LOGGER.info("bridge_core_source_resolved count=%d", len(home_assistant_ips))
+    else:
+        LOGGER.warning("bridge_core_source_unresolved")
+
     app = web.Application(
-        middlewares=[ingress_only],
+        middlewares=[internal_access_only],
         client_max_size=64 * 1024,
     )
+    app["home_assistant_ips"] = home_assistant_ips
     app.router.add_get("/", tester)
     app.router.add_get("/health", health)
     app.router.add_post("/api/v1/conversation", conversation)
+    app.router.add_post(BRIDGE_CONVERSATION_PATH, conversation)
     return app
 
 
