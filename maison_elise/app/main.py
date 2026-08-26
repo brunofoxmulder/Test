@@ -25,6 +25,102 @@ MAX_SESSION_ID_LENGTH = 256
 MAX_CONVERSATION_ID_LENGTH = 256
 MAX_TEXT_LENGTH = 4096
 
+AGENT_ID = "conversation.openai_conversation"
+LANGUAGE = "fr"
+VERSION = "0.1.0-dev.3"
+
+TESTER_HTML = """<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maison Élise — Recette locale</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 20px; max-width: 720px; }
+    h1 { margin-top: 0; font-size: 1.5rem; }
+    .card { border: 1px solid #7777; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    textarea { width: 100%; min-height: 110px; box-sizing: border-box; font: inherit; padding: 10px; }
+    button { font: inherit; font-weight: 600; padding: 10px 16px; margin-top: 10px; }
+    pre { white-space: pre-wrap; word-break: break-word; min-height: 70px; }
+    .muted { opacity: .75; }
+  </style>
+</head>
+<body>
+  <h1>Maison Élise — Recette locale</h1>
+  <div class="card">
+    <div><strong>Version :</strong> 0.1.0-dev.3</div>
+    <div><strong>Agent :</strong> conversation.openai_conversation</div>
+    <div><strong>Langue :</strong> fr</div>
+    <div class="muted">Ingress uniquement · aucune exposition publique Alexa dans ce jalon.</div>
+  </div>
+
+  <div class="card">
+    <label for="text"><strong>Question de test non actionnante</strong></label>
+    <textarea id="text">Réponds uniquement : Maison Élise test réussi.</textarea>
+    <button id="send" type="button">Envoyer au Conversation Agent</button>
+  </div>
+
+  <div class="card">
+    <strong>Résultat</strong>
+    <pre id="result">En attente.</pre>
+  </div>
+
+<script>
+(() => {
+  const button = document.getElementById("send");
+  const text = document.getElementById("text");
+  const result = document.getElementById("result");
+  let conversationId = null;
+
+  function requestId() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+    return "ingress-" + Date.now();
+  }
+
+  button.addEventListener("click", async () => {
+    const question = text.value.trim();
+    if (!question) {
+      result.textContent = "Question vide.";
+      return;
+    }
+
+    button.disabled = true;
+    result.textContent = "Envoi en cours…";
+
+    const payload = {
+      request_id: requestId(),
+      text: question,
+      source: "recette-ingress",
+      session_id: "jalon-a-local",
+      conversation_id: conversationId
+    };
+
+    try {
+      const response = await fetch("./api/v1/conversation", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const body = await response.json();
+      if (body.conversation_id) {
+        conversationId = body.conversation_id;
+      }
+      result.textContent = JSON.stringify(body, null, 2);
+    } catch (error) {
+      result.textContent = "Erreur locale : " + String(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
+"""
+
 
 @dataclass(slots=True)
 class RequestEnvelope:
@@ -48,10 +144,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 LOGGER = logging.getLogger("maison_elise")
-
-AGENT_ID = "conversation.openai_conversation"
-LANGUAGE = "fr"
-VERSION = "0.1.0-dev.2"
 
 
 def _required_text_field(
@@ -146,6 +238,10 @@ async def ingress_only(request: web.Request, handler):
         LOGGER.warning("ingress_rejected remote=%s", request.remote or "unknown")
         raise web.HTTPForbidden(text="Ingress access only")
     return await handler(request)
+
+
+async def tester(_: web.Request) -> web.Response:
+    return web.Response(text=TESTER_HTML, content_type="text/html", charset="utf-8")
 
 
 async def health(_: web.Request) -> web.Response:
@@ -245,7 +341,7 @@ async def conversation(request: web.Request) -> web.Response:
         result.continue_conversation,
     )
 
-    # Dev.2 returns the HA response to the authenticated Ingress tester.
+    # Dev.3 returns the HA response only to the authenticated Ingress tester.
     # Alexa asynchronous delivery is deliberately NOT implemented yet.
     return web.json_response(
         {
@@ -266,7 +362,7 @@ def create_app() -> web.Application:
         middlewares=[ingress_only],
         client_max_size=64 * 1024,
     )
-    app.router.add_get("/", health)
+    app.router.add_get("/", tester)
     app.router.add_get("/health", health)
     app.router.add_post("/api/v1/conversation", conversation)
     return app
