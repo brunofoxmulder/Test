@@ -27,7 +27,7 @@ MAX_TEXT_LENGTH = 4096
 
 AGENT_ID = "conversation.openai_conversation"
 LANGUAGE = "fr"
-VERSION = "0.1.0-dev.3"
+VERSION = "0.1.0-dev.4"
 
 TESTER_HTML = """<!doctype html>
 <html lang="fr">
@@ -49,7 +49,7 @@ TESTER_HTML = """<!doctype html>
 <body>
   <h1>Maison Élise — Recette locale</h1>
   <div class="card">
-    <div><strong>Version :</strong> 0.1.0-dev.3</div>
+    <div><strong>Version :</strong> 0.1.0-dev.4</div>
     <div><strong>Agent :</strong> conversation.openai_conversation</div>
     <div><strong>Langue :</strong> fr</div>
     <div class="muted">Ingress uniquement · aucune exposition publique Alexa dans ce jalon.</div>
@@ -341,7 +341,7 @@ async def conversation(request: web.Request) -> web.Response:
         result.continue_conversation,
     )
 
-    # Dev.3 returns the HA response only to the authenticated Ingress tester.
+    # Dev.4 returns the HA response only to the authenticated Ingress tester.
     # Alexa asynchronous delivery is deliberately NOT implemented yet.
     return web.json_response(
         {
