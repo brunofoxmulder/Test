@@ -51,6 +51,7 @@ LOGGER = logging.getLogger("maison_elise")
 
 AGENT_ID = "conversation.openai_conversation"
 LANGUAGE = "fr"
+VERSION = "0.1.0-dev.2"
 
 
 def _required_text_field(
@@ -152,7 +153,7 @@ async def health(_: web.Request) -> web.Response:
         {
             "ok": True,
             "service": "Maison Élise",
-            "version": "0.1.0-dev.1",
+            "version": VERSION,
             "agent_id": AGENT_ID,
             "language": LANGUAGE,
         }
@@ -244,7 +245,7 @@ async def conversation(request: web.Request) -> web.Response:
         result.continue_conversation,
     )
 
-    # Dev.1 returns the HA response to the authenticated Ingress tester.
+    # Dev.2 returns the HA response to the authenticated Ingress tester.
     # Alexa asynchronous delivery is deliberately NOT implemented yet.
     return web.json_response(
         {
