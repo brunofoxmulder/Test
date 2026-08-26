@@ -1,5 +1,5 @@
 name: Maison Élise
-version: "0.1.0-dev.4"
+version: "0.1.0-dev.5"
 slug: maison_elise
 description: "Passerelle d'entrée Alexa vers l'agent conversationnel Home Assistant."
 url: "https://github.com/brunofoxmulder/Test"
