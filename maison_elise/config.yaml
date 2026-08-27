@@ -1,5 +1,5 @@
 name: Maison Élise
-version: "0.1.0-dev.5"
+version: "0.1.0-dev.6"
 slug: maison_elise
 description: "Passerelle d'entrée Alexa vers l'agent conversationnel Home Assistant."
 url: "https://github.com/brunofoxmulder/Test"
@@ -20,5 +20,7 @@ panel_icon: mdi:message-processing
 panel_title: Maison Élise
 options:
   log_level: INFO
+  agent_id: conversation.openai_conversation
 schema:
   log_level: list(DEBUG|INFO|WARNING|ERROR)
+  agent_id: str(1,256)

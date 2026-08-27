@@ -1,0 +1,7 @@
+configuration:
+  agent_id:
+    name: Agent conversationnel
+    description: "Identifiant de l'agent Home Assistant utilisé par Maison Élise (ex. conversation.openai_conversation)."
+  log_level:
+    name: Niveau de journalisation
+    description: "Niveau de détail des journaux de Maison Élise."

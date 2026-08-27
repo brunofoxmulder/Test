@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import ipaddress
 import json
 import logging
@@ -12,6 +13,7 @@ from typing import Any
 
 from aiohttp import web
 
+from agent_config import load_conversation_agent_config
 from ha_client import (
     HomeAssistantConversationClient,
     HomeAssistantConversationError,
@@ -29,11 +31,10 @@ MAX_SESSION_ID_LENGTH = 256
 MAX_CONVERSATION_ID_LENGTH = 256
 MAX_TEXT_LENGTH = 4096
 
-AGENT_ID = "conversation.openai_conversation"
 LANGUAGE = "fr"
-VERSION = "0.1.0-dev.5"
+VERSION = "0.1.0-dev.6"
 
-TESTER_HTML = """<!doctype html>
+TESTER_HTML_TEMPLATE = """<!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
@@ -53,8 +54,8 @@ TESTER_HTML = """<!doctype html>
 <body>
   <h1>Maison Élise — Recette locale</h1>
   <div class="card">
-    <div><strong>Version :</strong> 0.1.0-dev.5</div>
-    <div><strong>Agent :</strong> conversation.openai_conversation</div>
+    <div><strong>Version :</strong> 0.1.0-dev.6</div>
+    <div><strong>Agent :</strong> __AGENT_ID__</div>
     <div><strong>Langue :</strong> fr</div>
     <div class="muted">Ingress uniquement · aucune exposition publique Alexa dans ce jalon.</div>
   </div>
@@ -142,6 +143,9 @@ def load_options() -> dict[str, Any]:
 
 
 OPTIONS = load_options()
+AGENT_CONFIG = load_conversation_agent_config(OPTIONS)
+AGENT_ID = AGENT_CONFIG.agent_id
+TESTER_HTML = TESTER_HTML_TEMPLATE.replace("__AGENT_ID__", html.escape(AGENT_ID))
 LOG_LEVEL = str(OPTIONS.get("log_level", "INFO")).upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -391,9 +395,6 @@ async def conversation(request: web.Request) -> web.Response:
         result.continue_conversation,
     )
 
-    # Dev.5 returns the same normalized response to either the authenticated
-    # Ingress tester or the Home Assistant Core Bridge route. Alexa itself is
-    # still never exposed directly to this App.
     return web.json_response(
         {
             "ok": True,
