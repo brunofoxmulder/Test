@@ -12,7 +12,6 @@ import aiohttp
 CORE_CONVERSATION_URL = "http://supervisor/core/api/conversation/process"
 CORE_WEBSOCKET_URL = "ws://supervisor/core/websocket"
 PREFERRED_ASSIST_AGENT = "preferred"
-PIPELINE_LIST_COMMAND = "assist_pipeline/pipeline/list"
 LOGGER = logging.getLogger("maison_elise")
 
 
@@ -29,13 +28,6 @@ class HomeAssistantConversationError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.http_status = http_status
-
-
-@dataclass(frozen=True, slots=True)
-class PreferredPipeline:
-    pipeline_id: str
-    pipeline_name: str
-    agent_id: str
 
 
 @dataclass(slots=True)
@@ -58,122 +50,81 @@ def _supervisor_token() -> str:
     return token
 
 
-async def resolve_preferred_pipeline(
-    *,
-    timeout_seconds: float = 5.0,
-) -> PreferredPipeline:
-    """Resolve the conversation engine of Home Assistant's preferred Assist pipeline."""
+async def resolve_preferred_agent_id() -> str:
+    """Return the conversation engine of the starred Assist pipeline."""
 
     token = _supervisor_token()
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    timeout = aiohttp.ClientTimeout(total=5.0)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.ws_connect(CORE_WEBSOCKET_URL) as websocket:
-                auth_required = await websocket.receive_json()
-                if not isinstance(auth_required, dict) or auth_required.get("type") != "auth_required":
-                    raise HomeAssistantConversationError(
-                        "Unexpected Home Assistant WebSocket authentication handshake",
-                        code="ha_ws_protocol_error",
-                    )
+                if (await websocket.receive_json()).get("type") != "auth_required":
+                    raise ValueError("unexpected websocket handshake")
+
+                await websocket.send_json({"type": "auth", "access_token": token})
+                if (await websocket.receive_json()).get("type") != "auth_ok":
+                    raise ValueError("websocket authentication failed")
 
                 await websocket.send_json(
-                    {
-                        "type": "auth",
-                        "access_token": token,
-                    }
+                    {"id": 1, "type": "assist_pipeline/pipeline/list"}
                 )
-                auth_result = await websocket.receive_json()
-                if not isinstance(auth_result, dict) or auth_result.get("type") != "auth_ok":
-                    raise HomeAssistantConversationError(
-                        "Home Assistant WebSocket authentication failed",
-                        code="ha_ws_auth_failed",
-                    )
-
-                await websocket.send_json(
-                    {
-                        "id": 1,
-                        "type": PIPELINE_LIST_COMMAND,
-                    }
-                )
-                response = await websocket.receive_json()
-    except HomeAssistantConversationError:
-        raise
-    except asyncio.TimeoutError as exc:
+                message = await websocket.receive_json()
+    except (aiohttp.ClientError, asyncio.TimeoutError, TypeError, ValueError) as exc:
         raise HomeAssistantConversationError(
-            "Home Assistant preferred Assist pipeline lookup timed out",
-            code="ha_pipeline_timeout",
-        ) from exc
-    except (aiohttp.ClientError, TypeError, ValueError) as exc:
-        raise HomeAssistantConversationError(
-            "Home Assistant preferred Assist pipeline lookup failed",
-            code="ha_pipeline_transport_error",
+            "Unable to resolve Home Assistant preferred Assist pipeline",
+            code="ha_preferred_pipeline_error",
         ) from exc
 
-    if not isinstance(response, dict) or response.get("type") != "result":
+    if not isinstance(message, dict) or not message.get("success"):
         raise HomeAssistantConversationError(
-            "Home Assistant returned an invalid pipeline list response",
-            code="ha_pipeline_invalid_response",
-        )
-    if not response.get("success"):
-        raise HomeAssistantConversationError(
-            "Home Assistant refused the Assist pipeline list request",
-            code="ha_pipeline_list_failed",
+            "Home Assistant refused the preferred Assist pipeline lookup",
+            code="ha_preferred_pipeline_error",
         )
 
-    result = response.get("result")
+    result = message.get("result")
     if not isinstance(result, dict):
         raise HomeAssistantConversationError(
-            "Home Assistant returned an invalid pipeline list payload",
-            code="ha_pipeline_invalid_response",
+            "Home Assistant returned an invalid Assist pipeline list",
+            code="ha_preferred_pipeline_error",
         )
 
-    preferred_pipeline_id = result.get("preferred_pipeline")
-    if not isinstance(preferred_pipeline_id, str) or not preferred_pipeline_id:
-        raise HomeAssistantConversationError(
-            "Home Assistant has no preferred Assist pipeline",
-            code="ha_preferred_pipeline_missing",
-        )
-
+    preferred_id = result.get("preferred_pipeline")
     pipelines = result.get("pipelines")
-    if not isinstance(pipelines, list):
+    if not isinstance(preferred_id, str) or not isinstance(pipelines, list):
         raise HomeAssistantConversationError(
-            "Home Assistant returned an invalid Assist pipeline collection",
-            code="ha_pipeline_invalid_response",
+            "Home Assistant has no usable preferred Assist pipeline",
+            code="ha_preferred_pipeline_error",
         )
 
-    preferred: dict[str, Any] | None = None
-    for pipeline in pipelines:
-        if isinstance(pipeline, dict) and pipeline.get("id") == preferred_pipeline_id:
-            preferred = pipeline
-            break
-
+    preferred = next(
+        (
+            pipeline
+            for pipeline in pipelines
+            if isinstance(pipeline, dict) and pipeline.get("id") == preferred_id
+        ),
+        None,
+    )
     if preferred is None:
         raise HomeAssistantConversationError(
-            "Preferred Assist pipeline was not present in the pipeline list",
-            code="ha_preferred_pipeline_not_found",
+            "Preferred Assist pipeline was not found",
+            code="ha_preferred_pipeline_error",
         )
 
     agent_id = preferred.get("conversation_engine")
     if not isinstance(agent_id, str) or not agent_id.startswith("conversation."):
         raise HomeAssistantConversationError(
-            "Preferred Assist pipeline has no valid conversation engine",
-            code="ha_preferred_pipeline_no_conversation_engine",
+            "Preferred Assist pipeline has no conversation engine",
+            code="ha_preferred_pipeline_error",
         )
 
-    pipeline_name = str(preferred.get("name") or preferred_pipeline_id)
-    resolved = PreferredPipeline(
-        pipeline_id=preferred_pipeline_id,
-        pipeline_name=pipeline_name,
-        agent_id=agent_id,
-    )
     LOGGER.info(
         "preferred_pipeline_resolved pipeline_id=%s pipeline_name=%s agent_id=%s",
-        resolved.pipeline_id,
-        resolved.pipeline_name,
-        resolved.agent_id,
+        preferred_id,
+        preferred.get("name") or preferred_id,
+        agent_id,
     )
-    return resolved
+    return agent_id
 
 
 def build_conversation_payload(
@@ -253,21 +204,18 @@ class HomeAssistantConversationClient:
         self._language = language
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
-    async def _resolve_agent_id(self) -> str:
-        if self._agent_id != PREFERRED_ASSIST_AGENT:
-            return self._agent_id
-        preferred = await resolve_preferred_pipeline()
-        return preferred.agent_id
-
     async def process(
         self,
         *,
         text: str,
         conversation_id: str | None = None,
     ) -> ConversationResult:
-        """Send one text message to the configured HA conversation agent."""
+        """Send one text message to the selected HA conversation agent."""
 
-        agent_id = await self._resolve_agent_id()
+        agent_id = self._agent_id
+        if agent_id == PREFERRED_ASSIST_AGENT:
+            agent_id = await resolve_preferred_agent_id()
+
         payload = build_conversation_payload(
             text=text,
             agent_id=agent_id,
