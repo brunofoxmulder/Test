@@ -32,7 +32,7 @@ MAX_CONVERSATION_ID_LENGTH = 256
 MAX_TEXT_LENGTH = 4096
 
 LANGUAGE = "fr"
-VERSION = "0.1.0-dev.6"
+VERSION = "0.1.0-dev.7"
 
 TESTER_HTML_TEMPLATE = """<!doctype html>
 <html lang="fr">
@@ -54,7 +54,7 @@ TESTER_HTML_TEMPLATE = """<!doctype html>
 <body>
   <h1>Maison Élise — Recette locale</h1>
   <div class="card">
-    <div><strong>Version :</strong> 0.1.0-dev.6</div>
+    <div><strong>Version :</strong> 0.1.0-dev.7</div>
     <div><strong>Agent :</strong> __AGENT_ID__</div>
     <div><strong>Langue :</strong> fr</div>
     <div class="muted">Ingress uniquement · aucune exposition publique Alexa dans ce jalon.</div>

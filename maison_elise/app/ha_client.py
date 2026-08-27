@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,9 @@ import aiohttp
 
 
 CORE_CONVERSATION_URL = "http://supervisor/core/api/conversation/process"
+CORE_WEBSOCKET_URL = "ws://supervisor/core/websocket"
+PREFERRED_ASSIST_AGENT = "preferred"
+LOGGER = logging.getLogger("maison_elise")
 
 
 class HomeAssistantConversationError(RuntimeError):
@@ -34,6 +38,93 @@ class ConversationResult:
     speech: str | None
     http_status: int
     raw: dict[str, Any]
+
+
+def _supervisor_token() -> str:
+    token = os.getenv("SUPERVISOR_TOKEN")
+    if not token:
+        raise HomeAssistantConversationError(
+            "SUPERVISOR_TOKEN is unavailable",
+            code="supervisor_token_unavailable",
+        )
+    return token
+
+
+async def resolve_preferred_agent_id() -> str:
+    """Return the conversation engine of the starred Assist pipeline."""
+
+    token = _supervisor_token()
+    timeout = aiohttp.ClientTimeout(total=5.0)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.ws_connect(CORE_WEBSOCKET_URL) as websocket:
+                if (await websocket.receive_json()).get("type") != "auth_required":
+                    raise ValueError("unexpected websocket handshake")
+
+                await websocket.send_json({"type": "auth", "access_token": token})
+                if (await websocket.receive_json()).get("type") != "auth_ok":
+                    raise ValueError("websocket authentication failed")
+
+                await websocket.send_json(
+                    {"id": 1, "type": "assist_pipeline/pipeline/list"}
+                )
+                message = await websocket.receive_json()
+    except (aiohttp.ClientError, asyncio.TimeoutError, TypeError, ValueError) as exc:
+        raise HomeAssistantConversationError(
+            "Unable to resolve Home Assistant preferred Assist pipeline",
+            code="ha_preferred_pipeline_error",
+        ) from exc
+
+    if not isinstance(message, dict) or not message.get("success"):
+        raise HomeAssistantConversationError(
+            "Home Assistant refused the preferred Assist pipeline lookup",
+            code="ha_preferred_pipeline_error",
+        )
+
+    result = message.get("result")
+    if not isinstance(result, dict):
+        raise HomeAssistantConversationError(
+            "Home Assistant returned an invalid Assist pipeline list",
+            code="ha_preferred_pipeline_error",
+        )
+
+    preferred_id = result.get("preferred_pipeline")
+    pipelines = result.get("pipelines")
+    if not isinstance(preferred_id, str) or not isinstance(pipelines, list):
+        raise HomeAssistantConversationError(
+            "Home Assistant has no usable preferred Assist pipeline",
+            code="ha_preferred_pipeline_error",
+        )
+
+    preferred = next(
+        (
+            pipeline
+            for pipeline in pipelines
+            if isinstance(pipeline, dict) and pipeline.get("id") == preferred_id
+        ),
+        None,
+    )
+    if preferred is None:
+        raise HomeAssistantConversationError(
+            "Preferred Assist pipeline was not found",
+            code="ha_preferred_pipeline_error",
+        )
+
+    agent_id = preferred.get("conversation_engine")
+    if not isinstance(agent_id, str) or not agent_id.startswith("conversation."):
+        raise HomeAssistantConversationError(
+            "Preferred Assist pipeline has no conversation engine",
+            code="ha_preferred_pipeline_error",
+        )
+
+    LOGGER.info(
+        "preferred_pipeline_resolved pipeline_id=%s pipeline_name=%s agent_id=%s",
+        preferred_id,
+        preferred.get("name") or preferred_id,
+        agent_id,
+    )
+    return agent_id
 
 
 def build_conversation_payload(
@@ -108,14 +199,7 @@ class HomeAssistantConversationClient:
         language: str = "fr",
         timeout_seconds: float = 45.0,
     ) -> None:
-        token = os.getenv("SUPERVISOR_TOKEN")
-        if not token:
-            raise HomeAssistantConversationError(
-                "SUPERVISOR_TOKEN is unavailable",
-                code="supervisor_token_unavailable",
-            )
-
-        self._token = token
+        self._token = _supervisor_token()
         self._agent_id = agent_id
         self._language = language
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -126,11 +210,15 @@ class HomeAssistantConversationClient:
         text: str,
         conversation_id: str | None = None,
     ) -> ConversationResult:
-        """Send one text message to the configured HA conversation agent."""
+        """Send one text message to the selected HA conversation agent."""
+
+        agent_id = self._agent_id
+        if agent_id == PREFERRED_ASSIST_AGENT:
+            agent_id = await resolve_preferred_agent_id()
 
         payload = build_conversation_payload(
             text=text,
-            agent_id=self._agent_id,
+            agent_id=agent_id,
             language=self._language,
             conversation_id=conversation_id,
         )
