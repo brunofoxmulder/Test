@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-APP_DIR = Path(__file__).resolve().parents[1] / "maison_elise" / "app"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = REPO_ROOT / "maison_elise" / "app"
 sys.path.insert(0, str(APP_DIR))
 
 import agent_config  # noqa: E402
@@ -92,6 +93,18 @@ class PreferredAssistConfigTests(unittest.TestCase):
     def test_missing_agent_id_also_uses_preferred(self):
         config = agent_config.load_conversation_agent_config({})
         self.assertEqual(config.agent_id, "preferred")
+
+    def test_manifest_declares_dev7_and_preferred_mode(self):
+        manifest = (REPO_ROOT / "maison_elise" / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn('version: "0.1.0-dev.7"', manifest)
+        self.assertIn("agent_id: preferred", manifest)
+
+    def test_translation_explains_starred_assist_selection(self):
+        translation = (
+            REPO_ROOT / "maison_elise" / "translations" / "fr.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("assistant préféré", translation)
+        self.assertIn("étoile", translation)
 
 
 class PreferredAssistResolverTests(unittest.IsolatedAsyncioTestCase):
